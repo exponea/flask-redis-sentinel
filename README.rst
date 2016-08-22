@@ -79,7 +79,7 @@ Accessing redis-py's Sentinel instance
 
     redis_sentinel = SentinelExtension(app=app)
 
-    @app.route('/'):
+    @app.route('/')
     def index():
         slaves = redis_sentinel.sentinel.discover_slaves('service1')
         return jsonify(slaves=slaves)
