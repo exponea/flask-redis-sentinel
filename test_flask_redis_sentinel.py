@@ -1,4 +1,4 @@
-# Copyright 2015 7Segments s r.o. <info@7segments.com>
+# Copyright 2015, 2016 Exponea s r.o. <info@exponea.com>
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,85 +16,7 @@ from unittest import TestCase
 from flask import Flask
 from mock import MagicMock
 import redis
-from flask_redis_sentinel import parse_sentinel_url, SentinelExtension, _PrefixedDict
-
-
-class TestUrl(TestCase):
-    def test_basic_url(self):
-        parsed = parse_sentinel_url('redis+sentinel://hostname:7000')
-        self.assertEqual(parsed.hosts, [('hostname', 7000)])
-        self.assertEqual(parsed.sentinel_options, {})
-        self.assertEqual(parsed.connection_options, {'db': 0})
-        self.assertEqual(parsed.default_connection, {'service': None, 'slave': False})
-
-    def test_without_port(self):
-        parsed = parse_sentinel_url('redis+sentinel://hostname')
-        self.assertEqual(parsed.hosts, [('hostname', 26379)])
-        self.assertEqual(parsed.sentinel_options, {})
-        self.assertEqual(parsed.connection_options, {'db': 0})
-        self.assertEqual(parsed.default_connection, {'service': None, 'slave': False})
-
-    def test_multiple_hosts(self):
-        parsed = parse_sentinel_url(
-            'redis+sentinel://hostname:7000,hostname2:7002,hostname3:7003')
-        self.assertEqual(parsed.hosts, [('hostname', 7000), ('hostname2', 7002), ('hostname3', 7003)])
-        self.assertEqual(parsed.sentinel_options, {})
-        self.assertEqual(parsed.connection_options, {'db': 0})
-        self.assertEqual(parsed.default_connection, {'service': None, 'slave': False})
-
-    def test_service_name_in_path(self):
-        parsed = parse_sentinel_url(
-            'redis+sentinel://hostname:7000/themaster')
-        self.assertEqual(parsed.default_connection, {'service': 'themaster', 'slave': False})
-
-    def test_service_name_in_query(self):
-        parsed = parse_sentinel_url(
-            'redis+sentinel://hostname:7000/theother?service=themaster')
-        self.assertEqual(parsed.default_connection, {'service': 'themaster', 'slave': False})
-
-    def test_db_in_path(self):
-        parsed = parse_sentinel_url(
-            'redis+sentinel://hostname:7000/themaster/2')
-        self.assertEqual(parsed.connection_options['db'], 2)
-
-    def test_db_in_query(self):
-        parsed = parse_sentinel_url(
-            'redis+sentinel://hostname:7000/themaster/2?db=4')
-        self.assertEqual(parsed.connection_options['db'], 4)
-
-    def test_socket_timeout(self):
-        parsed = parse_sentinel_url(
-            'redis+sentinel://hostname:7000/themaster/2?socket_timeout=0.1')
-        self.assertEqual(parsed.connection_options['socket_timeout'], 0.1)
-
-    def test_sentinel_socket_timeout(self):
-        parsed = parse_sentinel_url(
-            'redis+sentinel://hostname:7000/themaster/2?sentinel_socket_timeout=0.1')
-        self.assertEqual(parsed.sentinel_options['socket_timeout'], 0.1)
-
-    def test_no_value_for_option(self):
-        parsed = parse_sentinel_url('redis+sentinel://hostname:7000/?socket_timeout')
-        self.assertNotIn('sentinel_socket_timeout', parsed.connection_options)
-
-    def test_no_value_for_option2(self):
-        parsed = parse_sentinel_url('redis+sentinel://hostname:7000/?socket_timeout=')
-        self.assertNotIn('sentinel_socket_timeout', parsed.connection_options)
-
-    def test_multiple_values_for_option(self):
-        with self.assertRaisesRegexp(ValueError, 'Multiple values specified for sentinel_socket_timeout'):
-            parse_sentinel_url('redis+sentinel://hostname:7000/?sentinel_socket_timeout=0.1&sentinel_socket_timeout=2')
-
-    def test_unknown_option(self):
-        parsed = parse_sentinel_url('redis+sentinel://hostname:7000/?unknown_option=1')
-        self.assertNotIn('unknown_option', parsed.connection_options)
-
-    def test_unsupported_scheme(self):
-        with self.assertRaisesRegexp(ValueError, 'Unsupported scheme: redis'):
-            parse_sentinel_url('redis://hostname:7000/')
-
-    def test_with_password(self):
-        parsed = parse_sentinel_url('redis+sentinel://:thesecret@hostname:7000')
-        self.assertEquals(parsed.sentinel_options, {'password': 'thesecret'})
+from flask_redis_sentinel import SentinelExtension, _PrefixedDict
 
 
 class TestCompatibilityWithFlaskAndRedis(TestCase):
@@ -357,7 +279,7 @@ class TestWithApp(TestCase):
 
     def test_default_connection_sentinel_url_slave(self):
         sentinel = SentinelExtension(client_class=FakeRedis, sentinel_class=FakeSentinel)
-        self.app.config['REDIS_URL'] = 'redis+sentinel://hostname:7001/myslave/3?slave=true'
+        self.app.config['REDIS_URL'] = 'redis+sentinel://hostname:7001/myslave/3?client_type=slave'
         self.app.config['REDIS_DECODE_RESPONSES'] = True
         self.app.config['REDIS_SENTINEL_SOCKET_CONNECT_TIMEOUT'] = 0.3
         sentinel.init_app(self.app)

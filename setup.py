@@ -5,8 +5,8 @@ from setuptools import setup
 setup(
     name='Flask-Redis-Sentinel',
     py_modules=['flask_redis_sentinel'],
-    version='0.2.0',
-    install_requires=['Flask>=0.10.1', 'redis>=2.10.3'],
+    version='1.0.0',
+    install_requires=['Flask>=0.10.1', 'redis>=2.10.3', 'redis_sentinel_url>=1.0.0,<2.0.0'],
     description='Redis-Sentinel integration for Flask',
     url='https://github.com/infinario/flask-redis-sentinel',
     author='Martin Sucha',
@@ -21,7 +21,7 @@ setup(
         'Programming Language :: Python :: 3.4',
         'Operating System :: OS Independent',
         'License :: OSI Approved :: Apache Software License',
-        'Development Status :: 4 - Beta',
+        'Development Status :: 5 - Production/Stable',
         'Intended Audience :: Developers',
         'Topic :: Software Development :: Libraries :: Python Modules'
     ]

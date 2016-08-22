@@ -87,6 +87,20 @@ Accessing redis-py's Sentinel instance
 Change log
 ----------
 
+v1.0.0
+~~~~~~
+
+* Moved URL handling code to a separate library, `redis_sentinel_url`
+* Backward-incompatible change::
+
+    # Old
+    redis+sentinel://host:port/service?slave=true
+
+  Should now be written as::
+
+    # New
+    redis+sentinel://host:port/service?client_type=slave
+
 v0.2.0
 ~~~~~~
 

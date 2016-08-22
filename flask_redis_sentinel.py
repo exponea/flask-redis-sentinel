@@ -1,4 +1,4 @@
-# Copyright 2015 7Segments s r.o. <info@7segments.com>
+# Copyright 2015, 2016 Exponea s r.o. <info@exponea.com>
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@ from flask import current_app
 import warnings
 import redis
 import redis.sentinel  # requires redis-py 2.9.0+
+import redis_sentinel_url
 import sys
 from werkzeug.local import LocalProxy
 from werkzeug.utils import import_string
@@ -41,133 +42,6 @@ else:  # pragma: no cover
         return d.items()
 
 _EXTENSION_KEY = 'redissentinel'
-
-
-SentinelUrlParseResult = namedtuple('SentinelUrlParseResult', ['hosts', 'sentinel_options', 'connection_options',
-                                                               'default_connection'])
-
-
-def parse_sentinel_url(url, sentinel_options=None, connection_options=None):
-    """Parse a URL listing sentinel options.
-
-    :param url: redis+sentinel://host:port[,host2:port2,...]/service_name/db[?socket_timeout=0.1]
-    :param sentinel_options: default sentinel options as dict, the ones in url always win
-    :param connection_options: default client options as dict, the ones in url always win
-    :return: SentinelUrlParseResult
-    """
-
-    if isinstance(url, _string_types):
-        url = urlparse.urlparse(url)
-
-    if url.scheme != 'redis+sentinel':
-        raise ValueError('Unsupported scheme: {}'.format(url.scheme))
-
-    def parse_host(s):
-        if ':' in s:
-            host, port = s.split(':', 1)
-            port = int(port)
-        else:
-            host = s
-            port = 26379
-
-        return host, port
-
-    if '@' in url.netloc:
-        auth, hostspec = url.netloc.split('@', 1)
-    else:
-        auth = None
-        hostspec = url.netloc
-
-    if auth and ':' in auth:
-        _, password = auth.split(':', 1)
-    else:
-        password = None
-
-    hosts = [parse_host(s) for s in hostspec.split(',')]
-
-    global_option_types = {
-        'min_other_sentinels': int,
-        'db': int,
-        'service': str,
-        'slave': bool,
-    }
-
-    option_types = {
-        'socket_timeout': float,
-        'socket_connect_timeout': float,
-    }
-
-    sentinel_url_options = {}
-    if sentinel_options:
-        sentinel_url_options.update(sentinel_options)
-    url_options = {}
-    if connection_options:
-        url_options.update(connection_options)
-
-    if password is not None:
-        sentinel_url_options['password'] = password
-
-    for name, value in iteritems(urlparse.parse_qs(url.query)):
-        if name in global_option_types:
-            option_name = name
-            option_store = url_options
-            option_type = global_option_types[option_name]
-        else:
-            if name.startswith('sentinel_'):
-                option_name = name[9:]
-                option_store = sentinel_url_options
-            else:
-                option_name = name
-                option_store = url_options
-
-            if option_name not in option_types:
-                continue
-
-            option_type = option_types[option_name]
-
-        if len(value) > 1:
-            raise ValueError('Multiple values specified for {}'.format(name))
-
-        option_store[option_name] = option_type(value[0])
-
-    path = url.path
-    if path.startswith('/'):
-        path = path[1:]
-    if path == '':
-        path_parts = []
-    else:
-        path_parts = path.split('/')
-
-    if 'service' in url_options:
-        service_name = url_options.pop('service')
-    elif len(path_parts) >= 1:
-        service_name = path_parts[0]
-    else:
-        service_name = None
-
-    if 'slave' in url_options:
-        slave = url_options.pop('slave')
-    else:
-        slave = False
-
-    default_connection = {
-        'service': service_name,
-        'slave': slave
-    }
-
-    if 'db' not in url_options:
-        if len(path_parts) >= 2:
-            url_options['db'] = int(path_parts[1])
-        else:
-            url_options['db'] = 0
-
-    return SentinelUrlParseResult(hosts, sentinel_url_options, url_options, default_connection)
-
-
-def sentinel_from_url(url, sentinel_class=redis.sentinel.Sentinel, sentinel_options=None, connection_options=None):
-    parsed = parse_sentinel_url(url, sentinel_options=sentinel_options, connection_options=connection_options)
-    return (sentinel_class(parsed.hosts, sentinel_kwargs=parsed.sentinel_options, **parsed.connection_options),
-            parsed.default_connection)
 
 
 class _ExtensionData(object):
@@ -284,30 +158,18 @@ class SentinelExtension(object):
         data = _ExtensionData(client_class)
 
         if url:
-            parsed_url = urlparse.urlparse(url)
-            if parsed_url.scheme not in ['redis', 'rediss', 'unix', 'redis+sentinel']:
-                raise ValueError('Unsupported redis URL scheme: {}'.format(parsed_url.scheme))
-
             connection_options = self._config_from_variables(config, client_class)
+            sentinel_options = self._config_from_variables(_PrefixedDict(config, 'SENTINEL'), client_class)
 
             connection_options.pop('host', None)
             connection_options.pop('port', None)
             connection_options.pop('db', None)
 
-            if parsed_url.scheme == 'redis+sentinel':
-                sentinel_options = self._config_from_variables(_PrefixedDict(config, 'SENTINEL'), client_class)
-
-                sentinel, default_connnection = sentinel_from_url(parsed_url, sentinel_class=sentinel_class,
-                                                                  sentinel_options=sentinel_options,
-                                                                  connection_options=connection_options)
-                data.sentinel = sentinel
-                if default_connnection:
-                    if default_connnection['slave']:
-                        data.default_connection = sentinel.slave_for(default_connnection['service'], redis_class=client_class)
-                    else:
-                        data.default_connection = sentinel.master_for(default_connnection['service'], redis_class=client_class)
-            else:
-                data.default_connection = client_class.from_url(url, **connection_options)
+            result = redis_sentinel_url.connect(url, sentinel_class=sentinel_class,
+                                                sentinel_options=sentinel_options,
+                                                client_class=client_class,
+                                                client_options=connection_options)
+            data.sentinel, data.default_connection = result
         else:
             # Stay compatible with Flask-And-Redis for a while
             warnings.warn('Setting redis connection via separate variables is deprecated. Please use REDIS_URL.',
