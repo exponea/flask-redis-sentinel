@@ -1,8 +1,8 @@
 Flask-Redis-Sentinel
 ====================
 
-.. image:: https://travis-ci.org/Infinario/flask-redis-sentinel.svg
-    :target: https://travis-ci.org/Infinario/flask-redis-sentinel
+.. image:: https://travis-ci.org/exponea/flask-redis-sentinel.svg
+    :target: https://travis-ci.org/exponea/flask-redis-sentinel
     :alt: Travis CI
 
 Flask-Redis-Sentinel provides support for connecting to Redis using Sentinel and also supports connecting to Redis

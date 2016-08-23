@@ -8,7 +8,7 @@ setup(
     version='1.0.0',
     install_requires=['Flask>=0.10.1', 'redis>=2.10.3', 'redis_sentinel_url>=1.0.0,<2.0.0'],
     description='Redis-Sentinel integration for Flask',
-    url='https://github.com/infinario/flask-redis-sentinel',
+    url='https://github.com/exponea/flask-redis-sentinel',
     author='Martin Sucha',
     author_email='martin.sucha@infinario.com',
     license='Apache 2.0',
