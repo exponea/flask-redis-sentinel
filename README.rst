@@ -23,7 +23,7 @@ Basic usage
 
 .. code-block:: python
 
-    from flask.ext.redis_sentinel import SentinelExtension
+    from flask_redis_sentinel import SentinelExtension
 
     redis_sentinel = SentinelExtension()
     redis_connection = redis_sentinel.default_connection
@@ -60,7 +60,7 @@ Creating multiple connection pools using a single Sentinel cluster
 
 .. code-block:: python
 
-    from flask.ext.redis_sentinel import SentinelExtension
+    from flask_redis_sentinel import SentinelExtension
 
     redis_sentinel = SentinelExtension()
     master1 = redis_sentinel.master_for('service1')
@@ -72,7 +72,7 @@ Accessing redis-py's Sentinel instance
 
 .. code-block:: python
 
-    from flask.ext.redis_sentinel import SentinelExtension
+    from flask_redis_sentinel import SentinelExtension
     from flask import jsonify, Flask
 
     app = Flask('test')
