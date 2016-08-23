@@ -3,6 +3,8 @@
 *.bak
 *~
 .idea
+.tox
+.coverage
 Flask_Redis_Sentinel.egg-info
 MANIFEST
 dist
