@@ -87,6 +87,12 @@ Accessing redis-py's Sentinel instance
 Change log
 ----------
 
+v2.0.0
+~~~~~~
+
+* Connections are now thread-local to avoid race conditions after Redis master failover
+* Removed support for `REDIS_{HOST, PORT, DB}` config variables
+
 v1.0.0
 ~~~~~~
 

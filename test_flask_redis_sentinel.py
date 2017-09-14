@@ -1,4 +1,4 @@
-# Copyright 2015, 2016 Exponea s r.o. <info@exponea.com>
+# Copyright 2015, 2016, 2017 Exponea s r.o. <info@exponea.com>
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,85 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import threading
 from unittest import TestCase
 from flask import Flask
 from mock import MagicMock
 import redis
-from flask_redis_sentinel import SentinelExtension, _PrefixedDict
-
-
-class TestCompatibilityWithFlaskAndRedis(TestCase):
-    def test_empty_settings(self):
-        self.assertEqual(SentinelExtension._config_from_variables({}, redis.StrictRedis), {})
-
-    def test_port(self):
-        self.assertEqual(SentinelExtension._config_from_variables({'PORT': 7379}, redis.StrictRedis)['port'], 7379)
-
-    def test_host(self):
-        self.assertEqual(SentinelExtension._config_from_variables({'HOST': 'otherhost'}, redis.StrictRedis),
-                         {'host': 'otherhost'})
-
-    def test_host_path(self):
-        self.assertEqual(SentinelExtension._config_from_variables({'HOST': '/path/to/socket'}, redis.StrictRedis),
-                         {'unix_socket_path': '/path/to/socket'})
-
-    def test_host_file_url(self):
-        self.assertEqual(SentinelExtension._config_from_variables({'HOST': 'file:///path/to/socket'}, redis.StrictRedis),
-                         {'unix_socket_path': 'file:///path/to/socket'})
-
-    def test_db(self):
-        self.assertEqual(SentinelExtension._config_from_variables({'DB': 2}, redis.StrictRedis),
-                         {'db': 2})
-
-
-class TestPrefixedDict(TestCase):
-    def setUp(self):
-        self.config = {
-            'REDIS_HOST': 'localhost',
-            'REDIS_PORT': 6379,
-            'OTHER_KEY': 'aA',
-            'ALTERNATE_HOST': 'alternate.local',
-            'ALTERNATE_PORT': 6380,
-        }
-        self.prefixed = _PrefixedDict(self.config, 'REDIS')
-
-    def test_get(self):
-        self.assertEqual(self.prefixed.get('HOST'), 'localhost')
-        self.assertEqual(self.prefixed.get('PORT'), 6379)
-        self.assertEqual(self.prefixed.get('DB'), None)
-
-    def test_getitem(self):
-        self.assertEqual(self.prefixed['HOST'], 'localhost')
-        self.assertEqual(self.prefixed['PORT'], 6379)
-        with self.assertRaises(KeyError):
-            self.prefixed['DB']
-
-    def test_set(self):
-        self.prefixed['DB'] = 2
-        self.prefixed['PORT'] = 7000
-        self.assertEquals(self.config['REDIS_DB'], 2)
-        self.assertEquals(self.config['REDIS_PORT'], 7000)
-
-    def test_del(self):
-        del self.prefixed['PORT']
-        with self.assertRaises(KeyError):
-            del self.prefixed['DB']
-
-    def test_contains(self):
-        self.assertTrue('PORT' in self.prefixed)
-        self.assertFalse('DB' in self.prefixed)
-
-    def test_pop(self):
-        self.assertEquals(self.prefixed.pop('PORT'), 6379)
-        self.assertNotIn('REDIS_PORT', self.config)
-        with self.assertRaises(KeyError):
-            self.prefixed.pop('DB')
-
-    def test_pop_default(self):
-        self.assertEquals(self.prefixed.pop('PORT', None), 6379)
-        self.assertNotIn('REDIS_PORT', self.config)
-        self.assertIsNone(self.prefixed.pop('DB', None))
-        self.assertNotIn('REDIS_DB', self.config)
+from flask_redis_sentinel import SentinelExtension
 
 
 class FakeRedis(MagicMock):
@@ -185,9 +112,7 @@ class TestWithApp(TestCase):
         conn = sentinel.default_connection
         with self.app.app_context():
             inst = conn._get_current_object()
-            self.assertEqual(inst.kwargs['host'], 'localhost')
-            self.assertEqual(inst.kwargs['port'], 6379)
-            self.assertEqual(inst.kwargs['db'], 0)
+            self.assertEqual(inst.kwargs['url'], 'redis://localhost/0')
 
     def test_default_connection_with_config_class(self):
         sentinel = SentinelExtension()
@@ -196,9 +121,7 @@ class TestWithApp(TestCase):
         conn = sentinel.default_connection
         with self.app.app_context():
             inst = conn._get_current_object()
-            self.assertEqual(inst.kwargs['host'], 'localhost')
-            self.assertEqual(inst.kwargs['port'], 6379)
-            self.assertEqual(inst.kwargs['db'], 0)
+            self.assertEqual(inst.kwargs['url'], 'redis://localhost/0')
 
     def test_default_connection_with_init_class(self):
         sentinel = SentinelExtension()
@@ -206,9 +129,7 @@ class TestWithApp(TestCase):
         conn = sentinel.default_connection
         with self.app.app_context():
             inst = conn._get_current_object()
-            self.assertEqual(inst.kwargs['host'], 'localhost')
-            self.assertEqual(inst.kwargs['port'], 6379)
-            self.assertEqual(inst.kwargs['db'], 0)
+            self.assertEqual(inst.kwargs['url'], 'redis://localhost/0')
 
     def test_default_connection_with_config_class_string(self):
         sentinel = SentinelExtension()
@@ -217,9 +138,7 @@ class TestWithApp(TestCase):
         conn = sentinel.default_connection
         with self.app.app_context():
             inst = conn._get_current_object()
-            self.assertEqual(inst.kwargs['host'], 'localhost')
-            self.assertEqual(inst.kwargs['port'], 6379)
-            self.assertEqual(inst.kwargs['db'], 0)
+            self.assertEqual(inst.kwargs['url'], 'redis://localhost/0')
 
     def test_default_connection_redis_url(self):
         sentinel = SentinelExtension(client_class=FakeRedis)
@@ -238,17 +157,13 @@ class TestWithApp(TestCase):
 
     def test_default_connection_redis_vars(self):
         sentinel = SentinelExtension(client_class=FakeRedis)
-        self.app.config['REDIS_HOST'] = 'hostname'
-        self.app.config['REDIS_PORT'] = 7001
-        self.app.config['REDIS_DB'] = 3
+        self.app.config['REDIS_URL'] = 'redis://hostname:7001/3'
         self.app.config['REDIS_DECODE_RESPONSES'] = True
         sentinel.init_app(self.app)
         conn = sentinel.default_connection
         with self.app.app_context():
             inst = conn._get_current_object()
-            self.assertEqual(inst.kwargs['host'], 'hostname')
-            self.assertEqual(inst.kwargs['port'], 7001)
-            self.assertEqual(inst.kwargs['db'], 3)
+            self.assertEqual(inst.kwargs['url'], 'redis://hostname:7001/3')
             self.assertEqual(inst.kwargs['decode_responses'], True)
 
     def test_sentinel_kwargs_from_config(self):
@@ -259,7 +174,6 @@ class TestWithApp(TestCase):
         with self.app.app_context():
             self.assertIsNotNone(sentinel.sentinel)
             self.assertEquals(sentinel.sentinel.sentinel_kwargs, {'socket_connect_timeout': 0.3})
-
 
     def test_default_connection_sentinel_url_master(self):
         sentinel = SentinelExtension(client_class=FakeRedis, sentinel_class=FakeSentinel)
@@ -275,7 +189,6 @@ class TestWithApp(TestCase):
             self.assertEqual(inst.kwargs['service_name'], 'mymaster')
             self.assertEqual(inst.kwargs['connection_kwargs']['db'], 3)
             self.assertEqual(inst.kwargs['connection_kwargs']['decode_responses'], True)
-
 
     def test_default_connection_sentinel_url_slave(self):
         sentinel = SentinelExtension(client_class=FakeRedis, sentinel_class=FakeSentinel)
@@ -336,7 +249,9 @@ class TestWithApp(TestCase):
         sentinel2 = SentinelExtension()
 
         sentinel.init_app(self.app)
-        with self.assertRaisesRegexp(ValueError, 'Config prefix REDIS already registered'):
+
+        msg = 'Redis sentinel extension with config prefix REDIS is already registered'
+        with self.assertRaisesRegexp(RuntimeError, msg):
             sentinel2.init_app(self.app)
 
     def test_multiple_prefix_registration(self):
@@ -363,6 +278,44 @@ class TestWithApp(TestCase):
             inst = conn._get_current_object()
             self.assertEqual(inst.kwargs['url'], 'redis://hostname2:7003/5')
 
+    def _check_threads(self, sentinel):
+        connections = {}
+        with self.app.app_context():
+            connections['from_main_thread'] = sentinel.default_connection._get_current_object()
+
+        def in_another_thread():
+            with self.app.app_context():
+                connections['from_another_thread'] = sentinel.default_connection._get_current_object()
+
+        thread = threading.Thread(target=in_another_thread)
+        thread.start()
+        thread.join()
+
+        with self.app.app_context():
+            connections['from_main_thread_later'] = sentinel.default_connection._get_current_object()
+
+        return connections
+
+    def test_sentinel_threads(self):
+        sentinel = SentinelExtension(client_class=FakeRedis, sentinel_class=FakeSentinel)
+        self.app.config['REDIS_URL'] = 'redis+sentinel://hostname:7001/myslave/0'
+        sentinel.init_app(self.app)
+
+        connections = self._check_threads(sentinel)
+        self.assertIsNot(connections['from_another_thread'], connections['from_main_thread'])
+        self.assertIsNot(connections['from_another_thread'], connections['from_main_thread_later'])
+        self.assertIs(connections['from_main_thread'], connections['from_main_thread_later'])
+
+    def test_redis_threads(self):
+        sentinel = SentinelExtension(client_class=FakeRedis, sentinel_class=FakeSentinel)
+        self.app.config['REDIS_URL'] = 'redis://hostname:7001/0'
+        sentinel.init_app(self.app)
+
+        connections = self._check_threads(sentinel)
+        self.assertIs(connections['from_another_thread'], connections['from_main_thread'])
+        self.assertIs(connections['from_another_thread'], connections['from_main_thread_later'])
+        self.assertIs(connections['from_main_thread'], connections['from_main_thread_later'])
+
     def test_mixed_apps(self):
         sentinel1 = SentinelExtension(app=self.app, client_class=FakeRedis)
         conn1 = sentinel1.default_connection
@@ -374,11 +327,13 @@ class TestWithApp(TestCase):
         self.app3 = Flask('test3')
 
         with self.app2.app_context():
-            with self.assertRaisesRegexp(ValueError, 'RedisSentinel extension with config prefix REDIS was not initialized for application test2'):
+            msg = 'Redis sentinel extension with config prefix REDIS was not initialized for application test2'
+            with self.assertRaisesRegexp(RuntimeError, msg):
                 conn1._get_current_object()
 
         with self.app3.app_context():
-            with self.assertRaisesRegexp(ValueError, 'RedisSentinel extension with config prefix REDIS was not initialized for application test3'):
+            msg = 'Redis sentinel extension with config prefix REDIS was not initialized for application test3'
+            with self.assertRaisesRegexp(RuntimeError, msg):
                 conn1._get_current_object()
 
     def test_named_master(self):
@@ -402,7 +357,7 @@ class TestWithApp(TestCase):
         conn = sentinel.master_for('othermaster', db=6)
         with self.app.app_context():
             self.assertIsNone(sentinel.sentinel._get_current_object())
-            with self.assertRaisesRegexp(ValueError, 'Cannot get master othermaster using non-sentinel configuration'):
+            with self.assertRaisesRegexp(RuntimeError, 'Cannot get master othermaster using non-sentinel configuration'):
                 inst = conn._get_current_object()
 
     def test_named_slave(self):
@@ -426,5 +381,5 @@ class TestWithApp(TestCase):
         conn = sentinel.slave_for('otherslave', db=6)
         with self.app.app_context():
             self.assertIsNone(sentinel.sentinel._get_current_object())
-            with self.assertRaisesRegexp(ValueError, 'Cannot get slave otherslave using non-sentinel configuration'):
+            with self.assertRaisesRegexp(RuntimeError, 'Cannot get slave otherslave using non-sentinel configuration'):
                 inst = conn._get_current_object()
