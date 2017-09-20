@@ -151,7 +151,7 @@ class RedisSentinel(object):
 
     @staticmethod
     def _strip_dict_prefix(orig, prefix):
-        return {k[len(prefix):]: v for (k, v) in orig.items() if k.startswith(prefix)}
+        return {k[len(prefix):]: v for (k, v) in six.iteritems(orig) if k.startswith(prefix)}
 
     @staticmethod
     def _config_from_variables(config, the_class):
