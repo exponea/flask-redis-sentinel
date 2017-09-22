@@ -20,6 +20,7 @@ import redis_sentinel_url
 from flask import current_app
 from werkzeug.local import Local, LocalProxy
 from werkzeug.utils import import_string
+from six.moves import queue
 
 
 _EXTENSION_KEY = 'redissentinel'
@@ -34,6 +35,7 @@ class RedisSentinelInstance(object):
         self.sentinel_class = sentinel_class
         self.sentinel_options = sentinel_options
         self.local = Local()
+        self._connections = queue.Queue()
         self._connect()
         if self.local.connection[0] is None:
             # if there is no sentinel, we don't need to use thread-local storage
@@ -49,6 +51,8 @@ class RedisSentinelInstance(object):
                 sentinel_class=self.sentinel_class, sentinel_options=self.sentinel_options,
                 client_class=self.client_class, client_options=self.client_options)
             self.local.connection = conn
+            self._connections.put(conn[0])
+            self._connections.put(conn[1])
             return conn
 
     @property
@@ -74,6 +78,7 @@ class RedisSentinelInstance(object):
 
         conn = sentinel.master_for(service_name, redis_class=self.client_class, **kwargs)
         self.local.master_connections[service_name] = conn
+        self._connections.put(conn)
         return conn
 
     def slave_for(self, service_name, **kwargs):
@@ -91,7 +96,18 @@ class RedisSentinelInstance(object):
 
         conn = sentinel.slave_for(service_name, redis_class=self.client_class, **kwargs)
         self.local.slave_connections[service_name] = conn
+        self._connections.put(conn)
         return conn
+
+    def disconnect(self):
+        while True:
+            try:
+                conn = self._connections.get_nowait()
+            except queue.Empty:
+                break
+            else:
+                if conn is not None:
+                    conn.connection_pool.disconnect()
 
 
 class RedisSentinel(object):
@@ -175,6 +191,9 @@ class RedisSentinel(object):
 
     def slave_for(self, service_name, **kwargs):
         return LocalProxy(lambda: self.get_instance().slave_for(service_name, **kwargs))
+
+    def disconnect(self):
+        return self.get_instance().disconnect()
 
 
 SentinelExtension = RedisSentinel  # for backwards-compatibility

@@ -9,7 +9,7 @@ def read(fname):
 setup(
     name='Flask-Redis-Sentinel',
     py_modules=['flask_redis_sentinel'],
-    version='2.0.1',
+    version='2.1.0',
     install_requires=['Flask>=0.10.1', 'redis>=2.10.3', 'redis_sentinel_url>=1.0.0,<2.0.0', 'six'],
     description='Redis-Sentinel integration for Flask',
     long_description=read('README.rst'),

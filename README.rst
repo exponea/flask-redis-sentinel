@@ -87,6 +87,11 @@ Accessing redis-py's Sentinel instance
 Change log
 ----------
 
+v2.1.0
+~~~~~~
+
+* Added `disconnect()` method for resetting the connection pool
+
 v2.0.1
 ~~~~~~
 
