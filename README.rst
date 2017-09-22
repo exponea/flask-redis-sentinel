@@ -87,6 +87,11 @@ Accessing redis-py's Sentinel instance
 Change log
 ----------
 
+v2.0.1
+~~~~~~
+
+* Reupload to PyPI
+
 v2.0.0
 ~~~~~~
 
