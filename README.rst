@@ -90,6 +90,7 @@ Change log
 v2.1.0
 ~~~~~~
 
+* Thread-safe implementation of the sentinel connection pool, so only one pool per process is now used.
 * Added `disconnect()` method for resetting the connection pool
 
 v2.0.1

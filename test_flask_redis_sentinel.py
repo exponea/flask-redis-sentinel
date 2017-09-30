@@ -302,8 +302,8 @@ class TestWithApp(TestCase):
         sentinel.init_app(self.app)
 
         connections = self._check_threads(sentinel)
-        self.assertIsNot(connections['from_another_thread'], connections['from_main_thread'])
-        self.assertIsNot(connections['from_another_thread'], connections['from_main_thread_later'])
+        self.assertIs(connections['from_another_thread'], connections['from_main_thread'])
+        self.assertIs(connections['from_another_thread'], connections['from_main_thread_later'])
         self.assertIs(connections['from_main_thread'], connections['from_main_thread_later'])
 
     def test_redis_threads(self):

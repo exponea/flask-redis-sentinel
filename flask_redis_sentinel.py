@@ -14,16 +14,173 @@
 
 import six
 import inspect
+import random
+import threading
+import logging
+import weakref
 import redis
 import redis.sentinel
 import redis_sentinel_url
+from redis._compat import nativestr
 from flask import current_app
-from werkzeug.local import Local, LocalProxy
+from redis.exceptions import ConnectionError, ReadOnlyError
+from werkzeug.local import LocalProxy
 from werkzeug.utils import import_string
-from six.moves import queue
+
+logger = logging.getLogger(__name__)
 
 
 _EXTENSION_KEY = 'redissentinel'
+
+
+class SentinelManagedConnection(redis.Connection):
+    def __init__(self, **kwargs):
+        self.connection_pool = kwargs.pop('connection_pool')
+        super(SentinelManagedConnection, self).__init__(**kwargs)
+
+    def __repr__(self):
+        pool = self.connection_pool
+        s = '%s<service=%s%%s>' % (type(self).__name__, pool.service_name)
+        if self.host:
+            host_info = ',host=%s,port=%s' % (self.host, self.port)
+            s = s % host_info
+        return s
+
+    def connect_to(self, address):
+        self.host, self.port = address
+        super(SentinelManagedConnection, self).connect()
+        if self.connection_pool.check_connection:
+            self.send_command('PING')
+            if nativestr(self.read_response()) != 'PONG':
+                raise ConnectionError('PING failed')
+
+    def connect(self):
+        if self._sock:
+            return  # already connected
+        if self.connection_pool.is_master:
+            self.connect_to(self.connection_pool.get_master_address())
+        else:
+            for slave in self.connection_pool.rotate_slaves():
+                try:
+                    return self.connect_to(slave)
+                except ConnectionError:
+                    continue
+            raise SlaveNotFoundError  # Never be here
+
+    def read_response(self):
+        try:
+            return super(SentinelManagedConnection, self).read_response()
+        except ReadOnlyError:
+            if self.connection_pool.is_master:
+                # When talking to a master, a ReadOnlyError when likely
+                # indicates that the previous master that we're still connected
+                # to has been demoted to a slave and there's a new master.
+                raise ConnectionError('The previous master is now a slave')
+            raise
+
+
+class SentinelConnectionPool(redis.ConnectionPool):
+    """
+    Sentinel backed connection pool.
+
+    If ``check_connection`` flag is set to True, SentinelManagedConnection
+    sends a PING command right after establishing the connection.
+    """
+
+    def __init__(self, service_name, sentinel_manager, **kwargs):
+        kwargs['connection_class'] = kwargs.get(
+            'connection_class', SentinelManagedConnection)
+        self.is_master = kwargs.pop('is_master', True)
+        self.check_connection = kwargs.pop('check_connection', False)
+        super(SentinelConnectionPool, self).__init__(**kwargs)
+        self.connection_kwargs['connection_pool'] = weakref.proxy(self)
+        self.service_name = service_name
+        self.sentinel_manager = sentinel_manager
+
+    def __repr__(self):
+        return "%s<service=%s(%s)" % (
+            type(self).__name__,
+            self.service_name,
+            self.is_master and 'master' or 'slave',
+        )
+
+    def reset(self):
+        super(SentinelConnectionPool, self).reset()
+        self.master_address = None
+        self.slave_rr_counter = None
+
+    def get_master_address(self):
+        """Get the address of the current master"""
+        master_address = self.sentinel_manager.discover_master(
+            self.service_name)
+        if self.is_master:
+            if master_address != self.master_address:
+                self.master_address = master_address
+        return master_address
+
+    def rotate_slaves(self):
+        "Round-robin slave balancer"
+        slaves = self.sentinel_manager.discover_slaves(self.service_name)
+        if slaves:
+            if self.slave_rr_counter is None:
+                self.slave_rr_counter = random.randint(0, len(slaves) - 1)
+            for _ in xrange(len(slaves)):
+                self.slave_rr_counter = (
+                    self.slave_rr_counter + 1) % len(slaves)
+                slave = slaves[self.slave_rr_counter]
+                yield slave
+        # Fallback to the master connection
+        try:
+            yield self.get_master_address()
+        except MasterNotFoundError:
+            pass
+        raise SlaveNotFoundError('No slave found for %r' % (self.service_name))
+
+    def _check_connection(self, connection):
+        if self.is_master and self.master_address != (connection.host, connection.port):
+            # this is not a connection to the current master, stop using it
+            connection.disconnect()
+            return False
+        return True
+
+    def get_connection(self, command_name, *keys, **options):
+        "Get a connection from the pool"
+        self._checkpid()
+        while True:
+            try:
+                connection = self._available_connections.pop()
+            except IndexError:
+                connection = self.make_connection()
+            else:
+                if not self._check_connection(connection):
+                    continue
+            self._in_use_connections.add(connection)
+            return connection
+
+    def release(self, connection):
+        "Releases the connection back to the pool"
+        self._checkpid()
+        if connection.pid != self.pid:
+            return
+        self._in_use_connections.remove(connection)
+        if not self._check_connection(connection):
+            return
+        self._available_connections.append(connection)
+
+
+class Sentinel(redis.sentinel.Sentinel):
+
+    def master_for(self, service_name, redis_class=redis.StrictRedis,
+                   connection_pool_class=SentinelConnectionPool, **kwargs):
+        return super(Sentinel, self).master_for(
+            service_name, redis_class=redis_class,
+            connection_pool_class=connection_pool_class, **kwargs)
+
+    def slave_for(self, service_name, redis_class=redis.StrictRedis,
+                   connection_pool_class=SentinelConnectionPool, **kwargs):
+        return super(Sentinel, self).slave_for(
+            service_name, redis_class=redis_class,
+            connection_pool_class=connection_pool_class, **kwargs)
 
 
 class RedisSentinelInstance(object):
@@ -34,26 +191,33 @@ class RedisSentinelInstance(object):
         self.client_options = client_options
         self.sentinel_class = sentinel_class
         self.sentinel_options = sentinel_options
-        self.local = Local()
-        self._connections = queue.Queue()
+        self.connection = None
+        self.master_connections = {}
+        self.slave_connections = {}
+        self._connect_lock = threading.Lock()
         self._connect()
-        if self.local.connection[0] is None:
-            # if there is no sentinel, we don't need to use thread-local storage
-            self.connection = self.local.connection
-            self.local = self
 
     def _connect(self):
-        try:
-            return self.local.connection
-        except AttributeError:
+        with self._connect_lock:
+            if self.connection is not None:
+                return self.connection
+
             conn = redis_sentinel_url.connect(
                 self.url,
                 sentinel_class=self.sentinel_class, sentinel_options=self.sentinel_options,
                 client_class=self.client_class, client_options=self.client_options)
-            self.local.connection = conn
-            self._connections.put(conn[0])
-            self._connections.put(conn[1])
+            self.connection = conn
             return conn
+
+    def _iter_connections(self):
+        if self.connection is not None:
+            for conn in self.connection:
+                if conn is not None:
+                    yield conn
+        for conn in six.itervalues(self.master_connections):
+            yield conn
+        for conn in six.itervalues(self.slave_connections):
+            yield conn
 
     @property
     def sentinel(self):
@@ -64,50 +228,53 @@ class RedisSentinelInstance(object):
         return self._connect()[1]
 
     def master_for(self, service_name, **kwargs):
-        try:
-            return self.local.master_connections[service_name]
-        except AttributeError:
-            self.local.master_connections = {}
-        except KeyError:
-            pass
+        with self._connect_lock:
+            try:
+                return self.master_connections[service_name]
+            except KeyError:
+                pass
 
         sentinel = self.sentinel
         if sentinel is None:
             msg = 'Cannot get master {} using non-sentinel configuration'
             raise RuntimeError(msg.format(service_name))
 
-        conn = sentinel.master_for(service_name, redis_class=self.client_class, **kwargs)
-        self.local.master_connections[service_name] = conn
-        self._connections.put(conn)
-        return conn
+        with self._connect_lock:
+            try:
+                return self.master_connections[service_name]
+            except KeyError:
+                pass
+
+            conn = sentinel.master_for(service_name, redis_class=self.client_class, **kwargs)
+            self.master_connections[service_name] = conn
+            return conn
 
     def slave_for(self, service_name, **kwargs):
-        try:
-            return self.local.slave_connections[service_name]
-        except AttributeError:
-            self.local.slave_connections = {}
-        except KeyError:
-            pass
+        with self._connect_lock:
+            try:
+                return self.slave_connections[service_name]
+            except KeyError:
+                pass
 
         sentinel = self.sentinel
         if sentinel is None:
             msg = 'Cannot get slave {} using non-sentinel configuration'
             raise RuntimeError(msg.format(service_name))
 
-        conn = sentinel.slave_for(service_name, redis_class=self.client_class, **kwargs)
-        self.local.slave_connections[service_name] = conn
-        self._connections.put(conn)
-        return conn
+        with self._connect_lock:
+            try:
+                return self.slave_connections[service_name]
+            except KeyError:
+                pass
+
+            conn = sentinel.slave_for(service_name, redis_class=self.client_class, **kwargs)
+            self.slave_connections[service_name] = conn
+            return conn
 
     def disconnect(self):
-        while True:
-            try:
-                conn = self._connections.get_nowait()
-            except queue.Empty:
-                break
-            else:
-                if conn is not None:
-                    conn.connection_pool.disconnect()
+        with self._connect_lock:
+            for conn in self._iter_connections():
+                conn.connection_pool.disconnect()
 
 
 class RedisSentinel(object):
@@ -143,7 +310,7 @@ class RedisSentinel(object):
         client_class = self._resolve_class(
             config, 'CLASS', 'client_class', client_class, redis.StrictRedis)
         sentinel_class = self._resolve_class(
-            config, 'SENTINEL_CLASS', 'sentinel_class', sentinel_class, redis.sentinel.Sentinel)
+            config, 'SENTINEL_CLASS', 'sentinel_class', sentinel_class, Sentinel)
 
         url = config.pop('URL')
         client_options = self._config_from_variables(config, client_class)
