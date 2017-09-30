@@ -36,6 +36,7 @@ _EXTENSION_KEY = 'redissentinel'
 class SentinelManagedConnection(redis.Connection):
     def __init__(self, **kwargs):
         self.connection_pool = kwargs.pop('connection_pool')
+        self.to_be_disconnected = False
         super(SentinelManagedConnection, self).__init__(**kwargs)
 
     def __repr__(self):
@@ -75,6 +76,7 @@ class SentinelManagedConnection(redis.Connection):
                 # When talking to a master, a ReadOnlyError when likely
                 # indicates that the previous master that we're still connected
                 # to has been demoted to a slave and there's a new master.
+                self.to_be_disconnected = True
                 raise ConnectionError('The previous master is now a slave')
             raise
 
@@ -137,10 +139,14 @@ class SentinelConnectionPool(redis.ConnectionPool):
         raise SlaveNotFoundError('No slave found for %r' % (self.service_name))
 
     def _check_connection(self, connection):
-        if self.is_master and self.master_address != (connection.host, connection.port):
-            # this is not a connection to the current master, stop using it
+        if connection.to_be_disconnected:
             connection.disconnect()
+            self.get_master_address()
             return False
+        if self.is_master:
+            if self.master_address != (connection.host, connection.port):
+                connection.disconnect()
+                return False
         return True
 
     def get_connection(self, command_name, *keys, **options):
