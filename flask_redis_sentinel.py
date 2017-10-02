@@ -73,7 +73,7 @@ class SentinelManagedConnection(redis.Connection):
             return super(SentinelManagedConnection, self).read_response()
         except ReadOnlyError:
             if self.connection_pool.is_master:
-                # When talking to a master, a ReadOnlyError when likely
+                # When talking to a master, a ReadOnlyError likely
                 # indicates that the previous master that we're still connected
                 # to has been demoted to a slave and there's a new master.
                 self.to_be_disconnected = True
@@ -121,7 +121,7 @@ class SentinelConnectionPool(redis.ConnectionPool):
         return master_address
 
     def rotate_slaves(self):
-        "Round-robin slave balancer"
+        """Round-robin slave balancer"""
         slaves = self.sentinel_manager.discover_slaves(self.service_name)
         if slaves:
             if self.slave_rr_counter is None:
@@ -136,7 +136,7 @@ class SentinelConnectionPool(redis.ConnectionPool):
             yield self.get_master_address()
         except MasterNotFoundError:
             pass
-        raise SlaveNotFoundError('No slave found for %r' % (self.service_name))
+        raise SlaveNotFoundError('No slave found for %r' % (self.service_name,))
 
     def _check_connection(self, connection):
         if connection.to_be_disconnected:
@@ -150,7 +150,7 @@ class SentinelConnectionPool(redis.ConnectionPool):
         return True
 
     def get_connection(self, command_name, *keys, **options):
-        "Get a connection from the pool"
+        """Get a connection from the pool"""
         self._checkpid()
         while True:
             try:
@@ -164,7 +164,7 @@ class SentinelConnectionPool(redis.ConnectionPool):
             return connection
 
     def release(self, connection):
-        "Releases the connection back to the pool"
+        """Releases the connection back to the pool"""
         self._checkpid()
         if connection.pid != self.pid:
             return
