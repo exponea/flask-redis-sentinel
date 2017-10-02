@@ -24,6 +24,7 @@ import redis_sentinel_url
 from redis._compat import nativestr
 from flask import current_app
 from redis.exceptions import ConnectionError, ReadOnlyError
+from redis.sentinel import SlaveNotFoundError, MasterNotFoundError
 from werkzeug.local import LocalProxy
 from werkzeug.utils import import_string
 
