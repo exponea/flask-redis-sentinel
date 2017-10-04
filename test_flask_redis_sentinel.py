@@ -324,6 +324,9 @@ class TestWithApp(TestCase):
         sentinel2 = SentinelExtension(app=self.app2, config_prefix='CUSTOM_REDIS', client_class=FakeRedis)
         conn2 = sentinel2.default_connection
 
+        with self.app2.app_context():
+            conn2._get_current_object()
+
         self.app3 = Flask('test3')
 
         with self.app2.app_context():
@@ -357,8 +360,9 @@ class TestWithApp(TestCase):
         conn = sentinel.master_for('othermaster', db=6)
         with self.app.app_context():
             self.assertIsNone(sentinel.sentinel._get_current_object())
-            with self.assertRaisesRegexp(RuntimeError, 'Cannot get master othermaster using non-sentinel configuration'):
-                inst = conn._get_current_object()
+            msg = 'Cannot get master othermaster using non-sentinel configuration'
+            with self.assertRaisesRegexp(RuntimeError, msg):
+                conn._get_current_object()
 
     def test_named_slave(self):
         sentinel = SentinelExtension(client_class=FakeRedis, sentinel_class=FakeSentinel)
@@ -382,4 +386,4 @@ class TestWithApp(TestCase):
         with self.app.app_context():
             self.assertIsNone(sentinel.sentinel._get_current_object())
             with self.assertRaisesRegexp(RuntimeError, 'Cannot get slave otherslave using non-sentinel configuration'):
-                inst = conn._get_current_object()
+                conn._get_current_object()
